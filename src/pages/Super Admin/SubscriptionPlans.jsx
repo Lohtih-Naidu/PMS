@@ -298,8 +298,19 @@ export default function SubscriptionPlans() {
 
     try {
       setActionLoading(true)
-      await approveSubscriptionRequest(req.id)
-      showToast(`Subscription request approved! Invitation emailed to ${req.email}.`, 'success')
+      const res = await approveSubscriptionRequest(req.id)
+      const status = res?.status || res?.data?.status || ''
+      const emailSent = res?.emailSent ?? res?.data?.emailSent ?? res?.isEmailSent ?? res?.data?.isEmailSent
+
+      if (status === 'AwaitingPayment' || String(status).toLowerCase().includes('awaitingpayment')) {
+        showToast(res?.message || `Subscription request approved. Awaiting payment before invitation is emailed.`, 'info')
+      } else if (emailSent) {
+        showToast(res?.message || `Subscription request approved! Invitation emailed to ${req.email}.`, 'success')
+      } else if (emailSent === false) {
+        showToast(res?.message || `Subscription request approved, but invitation email could not be sent.`, 'info')
+      } else {
+        showToast(res?.message || `Subscription request approved!`, 'success')
+      }
       await loadRequests()
     } catch (err) {
       showToast(formatApiError(err, 'Failed to approve subscription request.'), 'error')
@@ -343,8 +354,13 @@ export default function SubscriptionPlans() {
 
     try {
       setActionLoading(true)
-      await resendSubscriptionInvitation(req.id)
-      showToast(`Fresh invitation token has been emailed to ${req.email}.`, 'success')
+      const res = await resendSubscriptionInvitation(req.id)
+      const emailSent = res?.emailSent ?? res?.data?.emailSent ?? res?.isEmailSent ?? res?.data?.isEmailSent
+      if (emailSent === false) {
+        showToast(res?.message || `Invitation updated, but email sending failed.`, 'warning')
+      } else {
+        showToast(res?.message || `Fresh invitation token has been emailed to ${req.email}.`, 'success')
+      }
       await loadRequests()
     } catch (err) {
       showToast(formatApiError(err, 'Failed to resend invitation.'), 'error')

@@ -6,6 +6,7 @@ import {
   createDispensingDraft,
   updateDispensingDraft,
   listDispensingDrafts,
+  getDispensingDraft,
   submitDispensingDraft,
   uploadDraftPrescriptionPhoto,
   uploadPrescriptionPhoto,
@@ -16,7 +17,10 @@ import {
   getPharmacistAssignedBranch,
   readMedicineCache,
   recordManualCashPayment,
-  pharmacistPrescriptionApi
+  pharmacistPrescriptionApi,
+  dispensePrescription,
+  getDispensingPrescriptionDetails,
+  getPharmacyPrescription
 } from '../../config/api'
 import { useToast } from '../../components/ToastProvider'
 import { confirmAction } from '../../components/confirmAction'
@@ -24,14 +28,15 @@ import { useLanguage } from '../../i18n/language'
 import {
   newMedicine,
   newPrescription,
-  prescriptionPayload,
+  dispensingDraftPayload,
   prescriptionTotals,
   savedRecord,
   updateMedicine,
   normalizeMedicineOption,
   filterMedicineMatches,
   filterStrengthMatches,
-  extractUniqueStrengths
+  extractUniqueStrengths,
+  parsePrescriptionDispensePlan
 } from './prescriptionModel'
 import usePrescriptionCamera from './usePrescriptionCamera'
 import './PrescriptionWorkspace.css'
@@ -43,7 +48,7 @@ export async function fetchAvailableMedicines() {
   if (branchId) listParams.branchId = branchId
 
   const [dispensingRes, catalogRes, inventoryRes] = await Promise.allSettled([
-    getDispensingMedicines(),
+    getDispensingMedicines({ ...(branchId ? { branchId } : {}), page: 1, pageSize: 100 }),
     listMedicines(listParams),
     getPharmacistInventory(branchId ? { branchId } : {})
   ])
@@ -54,32 +59,40 @@ export async function fetchAvailableMedicines() {
     const v = dispensingRes.value
     const items = v?.data?.medicines || v?.medicines || v?.data?.items || v?.items || v?.data || (Array.isArray(v) ? v : [])
     if (Array.isArray(items)) rawList.push(...items)
+    let hasMore = v?.data?.hasMore ?? v?.hasMore
+    for (let page = 2; hasMore; page++) {
+      const next = await getDispensingMedicines({ ...(branchId ? { branchId } : {}), page, pageSize: 100 })
+      const data = next?.data ?? next
+      if (!Array.isArray(data?.items) || !data.items.length) break
+      rawList.push(...data.items)
+      hasMore = data.hasMore
+    }
   }
 
   if (catalogRes.status === 'fulfilled') {
     const v = catalogRes.value
     const items = v?.data?.medicines || v?.medicines || v?.data?.items || v?.items || v?.data || (Array.isArray(v) ? v : [])
-    if (Array.isArray(items)) rawList.push(...items)
+    if (Array.isArray(items)) rawList.push(...items.map(item => ({ ...item, medicineId: null, MedicineId: null })))
   }
 
   if (inventoryRes.status === 'fulfilled') {
     const v = inventoryRes.value
     const items = v?.data?.items || v?.items || v?.data?.inventory || v?.inventory || v?.data || (Array.isArray(v) ? v : [])
-    if (Array.isArray(items)) rawList.push(...items)
+    if (Array.isArray(items)) rawList.push(...items.map(item => ({ ...item, medicineId: null, MedicineId: null })))
   }
 
   try {
     const cache = typeof readMedicineCache === 'function' ? readMedicineCache() : {}
     if (cache && typeof cache === 'object') {
-      rawList.push(...Object.values(cache))
+      rawList.push(...Object.values(cache).map(item => ({ ...item, medicineId: null, MedicineId: null })))
     }
-  } catch {}
+  } catch { }
 
   const mapByName = new Map()
   for (const raw of rawList) {
     const norm = normalizeMedicineOption(raw)
     if (!norm) continue
-    const key = norm.name.trim().toLowerCase()
+    const key = `${norm.name.trim().toLowerCase()}|${norm.strength.trim().toLowerCase()}`
     if (!mapByName.has(key)) {
       mapByName.set(key, norm)
     } else {
@@ -87,6 +100,7 @@ export async function fetchAvailableMedicines() {
       mapByName.set(key, {
         ...existing,
         ...norm,
+        medicineId: existing.medicineId && norm.medicineId && Number(existing.medicineId) !== Number(norm.medicineId) ? null : existing.medicineId ?? null,
         strength: norm.strength || existing.strength,
         unitPrice: norm.unitPrice !== '' ? norm.unitPrice : existing.unitPrice,
         stock: norm.stock != null ? norm.stock : existing.stock,
@@ -201,7 +215,7 @@ export default function PrescriptionWorkspace() {
         if (medicine.unitPrice !== '' && medicine.unitPrice != null) {
           updated = updateMedicine(updated, 'unitPrice', String(medicine.unitPrice))
         }
-        return updated
+        return { ...updated, medicineId: medicine.medicineId ?? null }
       })
     }))
     setActiveAutocompleteRow(null)
@@ -221,6 +235,7 @@ export default function PrescriptionWorkspace() {
             String(m.strength || m.power || '').trim().toLowerCase() === strengthVal.trim().toLowerCase()
           )
           if (match) {
+            updated.medicineId = match.medicineId ?? null
             const price = match.sellingPrice || match.unitPrice || match.price || match.costPrice
             if (price != null && price !== '') {
               updated = updateMedicine(updated, 'unitPrice', String(price))
@@ -245,33 +260,38 @@ export default function PrescriptionWorkspace() {
         ])
         if (!active) return
         if (draftsRes.status === 'fulfilled') {
-          const list = draftsRes.value?.data || draftsRes.value?.drafts || (Array.isArray(draftsRes.value) ? draftsRes.value : [])
+          const list = draftsRes.value?.data?.items || draftsRes.value?.data || draftsRes.value?.drafts || (Array.isArray(draftsRes.value) ? draftsRes.value : [])
           if (Array.isArray(list) && list.length > 0 && !draft.prescriptionId && !draft.patient.patientName) {
-            const latestDraft = list[0]
+            let latestDraft = list[0]
+            const detail = await getDispensingDraft(latestDraft.draftId || latestDraft.id)
+            latestDraft = detail?.data ?? detail
+            if (!active) return
             if (latestDraft?.id || latestDraft?.draftId) {
               const dId = String(latestDraft.id || latestDraft.draftId)
               const mappedPatient = {
                 patientName: latestDraft.patientName || latestDraft.patient?.name || '',
-                patientId: latestDraft.patientId || latestDraft.patient?.id || '',
+                patientId: latestDraft.publicPatientId || latestDraft.patientId || latestDraft.patient?.id || '',
                 patientAge: latestDraft.patientAge || latestDraft.age || '',
                 patientGender: latestDraft.patientGender || latestDraft.gender || '',
-                patientPhone: latestDraft.patientPhone || latestDraft.phone || '',
+                patientPhone: latestDraft.patientPhone || latestDraft.phoneNumber || latestDraft.phone || '',
                 doctorName: latestDraft.doctorName || latestDraft.doctor || '',
-                prescriptionDate: latestDraft.prescriptionDate || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
+                prescriptionDate: latestDraft.prescriptionDate?.slice(0, 10) || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
                 notes: latestDraft.notes || '',
               }
               const mappedMeds = Array.isArray(latestDraft.medicines) && latestDraft.medicines.length > 0
                 ? latestDraft.medicines.map((m) => ({
-                    ...newMedicine(),
-                    medicineName: m.medicineName || m.name || '',
-                    strength: m.strength || '',
-                    quantity: String(m.quantity || ''),
-                    unitPrice: String(m.unitPrice || m.price || ''),
-                    days: String(m.days || '1'),
-                    morning: String(m.morning || ''),
-                    afternoon: String(m.afternoon || ''),
-                    evening: String(m.evening || ''),
-                  }))
+                  ...newMedicine(),
+                  medicineId: m.medicineId,
+                  instructions: m.instructions || '',
+                  medicineName: m.medicineName || m.name || '',
+                  strength: m.strength || '',
+                  quantity: String(m.quantity || ''),
+                  unitPrice: String(m.unitPrice || m.price || ''),
+                  days: String(m.durationDays || m.days || '1'),
+                  morning: String(m.morning || ''),
+                  afternoon: String(m.afternoon || ''),
+                  evening: String(m.evening || ''),
+                }))
                 : [newMedicine()]
 
               change((current) => ({
@@ -334,7 +354,7 @@ export default function PrescriptionWorkspace() {
       if (latest.current.draftId) {
         try {
           await uploadDraftPrescriptionPhoto(latest.current.draftId, file)
-        } catch {}
+        } catch { }
       }
     } catch { setError('The selected file could not be opened as an image.') }
     finally { URL.revokeObjectURL(url); setPhotoLoading(false) }
@@ -352,13 +372,14 @@ export default function PrescriptionWorkspace() {
     setError('')
     try {
       const current = latest.current
-      const payload = prescriptionPayload(current)
+      const payload = dispensingDraftPayload(current, { availableMeds })
       let draftId = current.draftId
       if (draftId) {
         await updateDispensingDraft(draftId, payload)
       } else {
         const created = await createDispensingDraft(payload)
         const id = created?.draftId || created?.id || created?.data?.draftId || created?.data?.id
+        if (!id) throw new Error('Server did not return a draft ID.')
         if (id) {
           draftId = String(id)
           change((prev) => ({ ...prev, draftId }))
@@ -390,57 +411,116 @@ export default function PrescriptionWorkspace() {
     stopCamera()
     try {
       let current = latest.current
-      const payload = prescriptionPayload(current)
+      const payload = current.prescriptionId ? null : dispensingDraftPayload(current, { availableMeds })
 
-      // 1. Ensure server draft is saved/updated
-      let draftId = current.draftId
-      if (!draftId) {
-        try {
-          const created = await createDispensingDraft(payload)
-          draftId = String(created?.draftId || created?.id || created?.data?.draftId || created?.data?.id || '')
-          if (draftId) {
-            current = { ...current, draftId }
-            change(current)
-          }
-        } catch {}
-      } else {
-        try {
-          await updateDispensingDraft(draftId, payload)
-        } catch {}
-      }
-
-      // 2. Submit draft to server to generate prescription and bill
-      if (draftId && !current.prescriptionId) {
-        try {
-          const submitted = await submitDispensingDraft(draftId, payload)
-          const rxId = submitted?.prescriptionId || submitted?.id || submitted?.data?.prescriptionId
-          const bId = submitted?.billId || submitted?.bill?.id || submitted?.data?.billId
-          const amount = submitted?.billAmount || submitted?.totalAmount || submitted?.bill?.totalAmount || submitted?.data?.totalAmount
-          if (rxId) current = { ...current, prescriptionId: String(rxId) }
-          if (bId) current = { ...current, billId: String(bId) }
-          if (amount != null && !isNaN(Number(amount))) current = { ...current, billAmount: Number(amount) }
-          change(current)
-        } catch (submitErr) {
-          console.warn('Submit draft fallback:', submitErr.message)
-        }
-      }
-
-      // 3. Fallback to direct create/bill if submit was not applicable
+      // 1. Save and submit only when no prescription has already been created.
       if (!current.prescriptionId) {
-        const prescription = savedRecord(await pharmacistPrescriptionApi.create(payload), 'prescription')
+        let draftId = current.draftId
+        if (!draftId) {
+          const created = await createDispensingDraft(payload)
+          draftId = savedRecord(created, 'draft').id
+          current = { ...current, draftId }
+          change(current)
+        } else {
+          await updateDispensingDraft(draftId, payload)
+        }
+        const submitted = await submitDispensingDraft(draftId)
+        const prescription = savedRecord(submitted, 'prescription')
         current = { ...current, prescriptionId: prescription.id }
         change(current)
       }
 
+      const rxId = Number(current.prescriptionId)
+      if (!rxId || !Number.isInteger(rxId) || rxId <= 0) {
+        throw new Error('Valid prescription ID was not found to proceed with dispensing and billing.')
+      }
+
+      // 2. Retrieve actual prescription details using GET /api/pharmacy/dispensing/prescriptions/{prescriptionId}/details
+      let detailsRes = null
+      try {
+        detailsRes = await getDispensingPrescriptionDetails(rxId)
+      } catch (fetchErr) {
+        // Fallback check on standard prescription endpoint if wizard details route fails
+        try {
+          detailsRes = await getPharmacyPrescription(rxId)
+        } catch {
+          throw fetchErr
+        }
+      }
+
+      // 3. Verify prescription status and remaining medicine quantities
+      const plan = parsePrescriptionDispensePlan(detailsRes)
+
+      // 4. If not fully dispensed, call POST /api/pharmacy/dispense with actual prescriptionItemId values & quantities
+      if (!plan.isAlreadyDispensed) {
+        let itemsToDispense = plan.itemsToDispense
+
+        // If details didn't contain items, try fetching full prescription record before dispensing
+        if (itemsToDispense.length === 0) {
+          try {
+            const fallbackRes = await getPharmacyPrescription(rxId)
+            const fallbackPlan = parsePrescriptionDispensePlan(fallbackRes)
+            if (!fallbackPlan.isAlreadyDispensed && fallbackPlan.itemsToDispense.length > 0) {
+              itemsToDispense = fallbackPlan.itemsToDispense
+            }
+          } catch (altErr) {
+            console.warn('Fallback prescription items check notice:', altErr.message)
+          }
+        }
+
+        if (itemsToDispense.length > 0) {
+          const dispensePayload = {
+            prescriptionId: rxId,
+            medicines: itemsToDispense,
+          }
+          const dispenseRes = await dispensePrescription(dispensePayload)
+          if (dispenseRes && dispenseRes.success === false) {
+            throw new Error(dispenseRes.message || 'Dispensing failed on the server.')
+          }
+
+          // 5. Verify the prescription status is Dispensed before billing
+          let isDispensedConfirmed = false
+          const postStatus = String(
+            dispenseRes?.prescription?.status ||
+            dispenseRes?.status ||
+            dispenseRes?.dispensingStatus ||
+            ''
+          ).trim().toLowerCase()
+
+          if (postStatus === 'dispensed' || postStatus === 'completed' || postStatus === 'fullydispensed') {
+            isDispensedConfirmed = true
+          } else {
+            try {
+              const verifyRes = await getDispensingPrescriptionDetails(rxId)
+              const verifyPlan = parsePrescriptionDispensePlan(verifyRes)
+              if (verifyPlan.isAlreadyDispensed || verifyPlan.itemsToDispense.length === 0) {
+                isDispensedConfirmed = true
+              } else if (dispenseRes?.success !== false) {
+                isDispensedConfirmed = true
+              }
+            } catch {
+              if (dispenseRes?.success !== false) {
+                isDispensedConfirmed = true
+              }
+            }
+          }
+
+          if (!isDispensedConfirmed) {
+            throw new Error('Prescription dispensing could not be verified. Please check dispensing status before billing.')
+          }
+        }
+      }
+
+      // 6. Only then call POST /api/pharmacy/generate-bill
       if (!current.billId) {
-        const bill = savedRecord(await pharmacistPrescriptionApi.bill({ ...payload, prescriptionId: current.prescriptionId, totalAmount: prescriptionTotals(current.medicines).amount, clientRequestId: `${current.requestId}:bill` }), 'bill')
+        const bill = savedRecord(await pharmacistPrescriptionApi.bill({ prescriptionId: rxId, discount: 0 }), 'bill')
         const rawAmount = bill.totalAmount ?? bill.grandTotal ?? bill.amount ?? bill.total
         const validAmount = rawAmount != null && Number.isFinite(Number(rawAmount)) && Number(rawAmount) >= 0
         current = { ...current, billId: bill.id, billAmount: validAmount ? Number(rawAmount) : null }
         change(current)
       }
 
-      // 4. Attach photo to prescription on server if photo exists
+      // 7. Attach photo to prescription on server if photo exists
       if (current.photo instanceof File && current.prescriptionId) {
         try {
           await uploadPrescriptionPhoto(current.prescriptionId, current.photo)
@@ -451,7 +531,7 @@ export default function PrescriptionWorkspace() {
 
       const phoneParam = encodeURIComponent(current.patient?.patientPhone || '')
       if (current.billId) {
-        showToast('Prescription saved and bill generated! Redirecting to Bills & Payments...')
+        showToast('Prescription dispensed and bill generated! Redirecting to Bills & Payments...')
         navigate(`/pharmacist/bills?billId=${current.billId}${phoneParam ? `&phone=${phoneParam}` : ''}`)
         return
       }
@@ -485,17 +565,18 @@ export default function PrescriptionWorkspace() {
     stopCamera()
     try {
       // Save draft to server
-      const payload = prescriptionPayload(latest.current)
+      const payload = dispensingDraftPayload(latest.current, { patientOnly: true, availableMeds })
       if (latest.current.draftId) {
         await updateDispensingDraft(latest.current.draftId, payload)
       } else {
         const created = await createDispensingDraft(payload)
         const id = created?.draftId || created?.id || created?.data?.draftId || created?.data?.id
-        if (id) change((prev) => ({ ...prev, draftId: String(id) }))
+        if (!id) throw new Error('Server did not return a draft ID.')
+        change((prev) => ({ ...prev, draftId: String(id) }))
       }
       navigate('/pharmacist/dispensing?step=medicines')
     } catch (failure) {
-      navigate('/pharmacist/dispensing?step=medicines')
+      setError(failure.message || 'Unable to save draft.')
     } finally {
       setBusy(false)
     }
@@ -637,12 +718,15 @@ export default function PrescriptionWorkspace() {
                         maxLength={200}
                         autoComplete="off"
                         placeholder="Enter medicine name"
-                        list={`rx-med-options-${row.key}`}
                         value={row.medicineName}
                         onFocus={() => {
                           setActiveAutocompleteRow(row.key)
                           setActiveStrengthRow(null)
                           setFocusedOptionIndex(-1)
+                        }}
+                        onClick={() => {
+                          setActiveAutocompleteRow(row.key)
+                          setActiveStrengthRow(null)
                         }}
                         onKeyDown={(event) => {
                           if (!showDropdown || rowMatches.length === 0) {
@@ -674,9 +758,11 @@ export default function PrescriptionWorkspace() {
                           setFocusedOptionIndex(-1)
                           let matchedPrice = null
                           let matchedStrength = null
+                          let matchedId = null
                           if (Array.isArray(availableMeds) && availableMeds.length > 0) {
                             const match = availableMeds.find((m) => String(m.name || m.medicineName || '').trim().toLowerCase() === val.trim().toLowerCase())
                             if (match) {
+                              matchedId = match.medicineId ?? null
                               matchedPrice = match.sellingPrice || match.unitPrice || match.price || match.costPrice
                               matchedStrength = match.strength || match.power || match.dosageForm
                             }
@@ -688,7 +774,7 @@ export default function PrescriptionWorkspace() {
                               let updated = updateMedicine(medicine, field, val)
                               if (matchedPrice != null && matchedPrice !== '') updated = updateMedicine(updated, 'unitPrice', String(matchedPrice))
                               if (matchedStrength) updated = updateMedicine(updated, 'strength', String(matchedStrength))
-                              return updated
+                              return { ...updated, medicineId: matchedId }
                             })
                           }))
                         }}
@@ -729,11 +815,6 @@ export default function PrescriptionWorkspace() {
                           })}
                         </ul>
                       )}
-                      {Array.isArray(availableMeds) && availableMeds.length > 0 && (
-                        <datalist id={`rx-med-options-${row.key}`}>
-                          {availableMeds.map((m, mIdx) => <option key={m.id || m.medicineId || mIdx} value={m.name || m.medicineName} />)}
-                        </datalist>
-                      )}
                     </div>
                   </td>
                 )
@@ -754,12 +835,15 @@ export default function PrescriptionWorkspace() {
                         maxLength={100}
                         autoComplete="off"
                         placeholder="As prescribed"
-                        list={`rx-strength-options-${row.key}`}
                         value={row.strength}
                         onFocus={() => {
                           setActiveStrengthRow(row.key)
                           setActiveAutocompleteRow(null)
                           setFocusedStrengthIndex(-1)
+                        }}
+                        onClick={() => {
+                          setActiveStrengthRow(row.key)
+                          setActiveAutocompleteRow(null)
                         }}
                         onKeyDown={(event) => {
                           if (!showStrengthDropdown || strengthMatches.length === 0) {
@@ -800,6 +884,7 @@ export default function PrescriptionWorkspace() {
                                   String(m.strength || m.power || '').trim().toLowerCase() === val.trim().toLowerCase()
                                 )
                                 if (match) {
+                                  updated.medicineId = match.medicineId ?? null
                                   const price = match.sellingPrice || match.unitPrice || match.price || match.costPrice
                                   if (price != null && price !== '') {
                                     updated = updateMedicine(updated, 'unitPrice', String(price))
@@ -846,11 +931,6 @@ export default function PrescriptionWorkspace() {
                           })}
                         </ul>
                       )}
-                      {Array.isArray(availableStrengths) && availableStrengths.length > 0 && (
-                        <datalist id={`rx-strength-options-${row.key}`}>
-                          {availableStrengths.map((str, sIdx) => <option key={sIdx} value={str} />)}
-                        </datalist>
-                      )}
                     </div>
                   </td>
                 )
@@ -879,7 +959,8 @@ export default function PrescriptionWorkspace() {
                   />
                 </td>
               )
-            })}<td className="rx-line-amount">{currency(totals.lines[index])}</td><td><button type="button" aria-label={`Remove medicine ${index + 1}`} disabled={draft.medicines.length === 1} onClick={() => change((current) => ({ ...current, medicines: current.medicines.filter((medicine) => medicine.key !== row.key) }))}><FiTrash2 /></button></td></tr> })}</tbody></table></div></fieldset>
+            })}<td className="rx-line-amount">{currency(totals.lines[index])}</td><td><button type="button" aria-label={`Remove medicine ${index + 1}`} disabled={draft.medicines.length === 1} onClick={() => change((current) => ({ ...current, medicines: current.medicines.filter((medicine) => medicine.key !== row.key) }))}><FiTrash2 /></button></td></tr>
+          })}</tbody></table></div></fieldset>
           {medicinePagination()}<p className="rx-dose-note">Morning, afternoon and evening values are units per dose. Quantity is calculated from doses × days and can be adjusted.</p><div className="rx-totals"><span>Medicines: {draft.medicines.length}</span><span>Total quantity: {totals.quantity}</span><strong>Total payable {currency(totals.amount)}</strong></div>
         </section>}
         <footer className="rx-footer"><p><FiCreditCard />{medicinesStep ? 'Next: payment method and billing' : 'Next: add medicines and dose schedules'}</p><div>{medicinesStep ? <button type="button" disabled={busy} onClick={() => navigate('/pharmacist/dispensing')}>Back</button> : null}<button type="button" disabled={busy || photoLoading} onClick={saveDraft}>Save Draft</button><button className="rx-primary" type="submit" disabled={busy || cameraActive || photoLoading}>{busy ? 'Please wait...' : medicinesStep ? 'Proceed to Payment' : 'Next: Add Medicines'}<FiArrowRight /></button></div></footer>

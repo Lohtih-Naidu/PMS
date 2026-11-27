@@ -169,7 +169,7 @@ function buildMainBranch(settings = {}) {
   const name = assignment.pharmacyName || user.pharmacyName || settings.pharmacyName || ''
   if (!name || isDefaultOwner(name)) return null
 
-  const branchId = assignment.branchId || assignment.mainBranchId || pharmacyId || '1'
+  const branchId = assignment.branchId || assignment.mainBranchId || ''
   const phone = assignment.pharmacyContactNumber || assignment.phone || assignment.mobileNumber || user.phone || ''
   const email = assignment.pharmacyEmail || assignment.email || user.email || ''
   const address = assignment.pharmacyAddress || assignment.address || ''

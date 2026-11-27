@@ -39,24 +39,13 @@ function resolveLoggedInUserName(role) {
     const assignment = readStoredUser(['pharmacyAdminAssignment'])
     const pendingAuth = readStoredUser(['__pms_admin_pending_auth'])
 
-    let cleanEmail = String(user?.email || pendingAuth?.email || '').trim().toLowerCase()
-    if (cleanEmail.includes('nithish') && pendingAuth?.email && !pendingAuth.email.includes('nithish')) {
-      cleanEmail = pendingAuth.email.trim().toLowerCase()
-    }
-
-    let rawName = String(user?.name || user?.fullName || '').trim()
-    if (/pharmacy/i.test(rawName) || (!cleanEmail.includes('nithish') && /nithish/i.test(rawName)) || (!cleanEmail.includes('raju') && /raju/i.test(rawName))) {
-      rawName = ''
-    }
-
-    let displayName = rawName
-    if (cleanEmail.includes('venkatagoutham') || cleanEmail.includes('goutham')) {
-      displayName = 'Venkata Goutham'
-    } else if (!displayName && cleanEmail) {
+    const cleanEmail = String(user?.email || pendingAuth?.email || '').trim().toLowerCase()
+    let rawName = String(user?.name || user?.fullName || assignment?.adminName || '').trim()
+    if (!rawName && cleanEmail) {
       const emailPrefix = cleanEmail.split('@')[0].replace(/[0-9._-]+$/, '')
-      displayName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : ''
+      rawName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : ''
     }
-    return displayName || user?.name || user?.fullName || assignment?.adminName || 'Admin'
+    return rawName || 'Admin'
   }
 
   if (roleType.includes('super') || path.startsWith('/super-admin')) {

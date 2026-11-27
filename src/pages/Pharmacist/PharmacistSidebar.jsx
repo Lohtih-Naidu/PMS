@@ -58,7 +58,7 @@ function PharmacistSidebar({ activeLabel, onNavigate }) {
   }, [])
 
   const visibleNavigation = pharmacistNavigation.filter((item) =>
-    item.label === 'Dashboard' || hasPharmacistPermission(permissions, item.label, 'view')
+    item.label === 'Dashboard' || item.label === 'Notifications' || hasPharmacistPermission(permissions, item.label, 'view')
   )
 
   return (

@@ -391,7 +391,7 @@ export default function PharmacistPayments() {
       await simulateQrPayment(activeBillId, {
         amount: Number(upiAmount) || Number(billStatus?.balanceDue) || 100
       })
-      showToast('Payment simulation successful!')
+      showToast('Payment simulation completed for testing. Note: Simulation does not represent an actual credited payment.')
       stopQrPolling()
       setQrData(null)
       fetchBillData(activeBillId)

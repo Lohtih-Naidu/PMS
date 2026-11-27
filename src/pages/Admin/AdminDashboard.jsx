@@ -694,22 +694,13 @@ function AdminDashboard() {
       return JSON.parse(sessionStorage.getItem('__pms_admin_pending_auth') || localStorage.getItem('__pms_admin_pending_auth') || '{}')
     } catch { return {} }
   })()
-  let cleanEmail = String(adminUser?.email || pendingAuth?.email || '').trim().toLowerCase()
-  if (cleanEmail.includes('nithish') && pendingAuth?.email && !pendingAuth.email.includes('nithish')) {
-    cleanEmail = pendingAuth.email.trim().toLowerCase()
-  }
+  const cleanEmail = String(adminUser?.email || pendingAuth?.email || '').trim().toLowerCase()
   let rawName = String(adminUser?.name || adminUser?.fullName || '').trim()
-  if (/pharmacy/i.test(rawName) || (!cleanEmail.includes('nithish') && /nithish/i.test(rawName)) || (!cleanEmail.includes('raju') && /raju/i.test(rawName))) {
-    rawName = ''
-  }
-  let adminDisplayName = rawName
-  if (cleanEmail.includes('venkatagoutham') || cleanEmail.includes('goutham')) {
-    adminDisplayName = 'Venkata Goutham'
-  } else if (!adminDisplayName && cleanEmail) {
+  if (!rawName && cleanEmail) {
     const emailPrefix = cleanEmail.split('@')[0].replace(/[0-9._-]+$/, '')
-    adminDisplayName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : ''
+    rawName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : ''
   }
-  const adminName = adminDisplayName || adminUser?.name || adminUser?.fullName || 'Admin'
+  const adminName = rawName || 'Admin'
 
   return (
     <AdminLayout activeLabel="Dashboard" title="Admin Dashboard" subtitle="Admin / Dashboard">

@@ -1078,54 +1078,6 @@ export default function StockTransfers() {
       setCreateErrors({})
       refresh()
     } catch (err) {
-      const errMsg = String(err?.message || err || '')
-      if (
-        /batch not found in the source branch inventory/i.test(errMsg) ||
-        /destination branch/i.test(errMsg) ||
-        /inventory/i.test(errMsg) ||
-        /signed-in branch/i.test(errMsg) ||
-        /from location/i.test(errMsg) ||
-        /branch/i.test(errMsg)
-      ) {
-        console.warn('Backend rejected stock transfer batch/branch validation; saving transfer locally:', errMsg)
-        const localTransfer = {
-          id: `trans_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-          transferId: `TRF-${Date.now().toString().slice(-6)}`,
-          fromLocation: createForm.fromLocation.trim() || fromLocClean || 'Main Branch',
-          toLocation: createForm.toLocation.trim() || toLocClean || 'Sub Branch',
-          medicineName: createForm.medicineName.trim(),
-          batchNumber: createForm.batchNo.trim(),
-          batchNo: createForm.batchNo.trim(),
-          transferQuantity: quantityNum,
-          quantity: quantityNum,
-          requestedBy: createForm.requestedBy.trim(),
-          approvedBy: (createForm.approvedBy || '').trim(),
-          status: 'Pending',
-          createdAt: new Date().toISOString(),
-          date: new Date().toISOString().split('T')[0],
-          isLocal: true,
-          _isPendingSync: true,
-        }
-        setItems(prev => {
-          const next = [localTransfer, ...prev.filter(x => getId(x) !== getId(localTransfer))]
-          writeLocalStockTransfers(next)
-          return next
-        })
-        showToast('Stock transfer created successfully!')
-        setCreateOpen(false)
-        setCreateForm({
-          fromLocation: '',
-          toLocation: '',
-          medicineName: '',
-          batchNo: '',
-          quantity: '',
-          requestedBy: '',
-          approvedBy: ''
-        })
-        setCreateErrors({})
-        refresh()
-        return
-      }
       showToast(err.message || 'Failed to create stock transfer request.', 'error')
     } finally {
       setSubmitting(false)

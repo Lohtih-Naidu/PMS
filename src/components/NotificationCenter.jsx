@@ -126,7 +126,7 @@ export default function NotificationCenter({ role }) {
         const response = await api.list({ folder: tab === 'sent' ? 'sent' : 'inbox', ...(tab === 'read' || tab === 'unread' ? { status: tab } : {}), page, pageSize: PAGE_SIZE }, { signal: controller.signal })
         if (!current) return
         const body = notificationBody(response)
-        const total = body.total ?? body.pagination?.total ?? body.count
+        const total = body.total ?? body.Total ?? body.totalCount ?? body.TotalCount ?? body.pagination?.total ?? body.count ?? body.Count
         let incoming = notificationList(response).map((item) => normalizeNotification(item, tab === 'sent' ? 'sent' : 'inbox'))
 
         if (role === 'superAdmin' && tab !== 'sent') {
@@ -146,7 +146,19 @@ export default function NotificationCenter({ role }) {
         }
         setItems((previous) => page === 1 ? incoming : [...previous, ...incoming.filter((item) => !item.id || !previous.some((old) => old.id === item.id))])
         const nextCounts = body.counts || response?.counts || body.Counts || response?.Counts || {}
-        const unread = nextCounts.unread ?? nextCounts.Unread ?? body.unreadCount ?? response?.unreadCount
+        let unread = nextCounts.unread ?? nextCounts.Unread ?? body.unreadCount ?? response?.unreadCount ?? body.UnreadCount ?? response?.UnreadCount
+
+        if (unread == null && typeof api.unreadCount === 'function' && !controller.signal.aborted) {
+          try {
+            const countRes = await api.unreadCount({ signal: controller.signal })
+            const countBody = countRes?.data ?? countRes
+            const fetched = countBody?.unreadCount ?? countBody?.UnreadCount ?? countBody?.counts?.unread
+            if (fetched != null && Number.isFinite(Number(fetched))) {
+              unread = Number(fetched)
+            }
+          } catch { /* unread fallback */ }
+        }
+
         setCounts({ ...nextCounts, ...(Number.isFinite(Number(unread)) && unread != null ? { unread: Number(unread) } : {}) })
         if (unread != null && Number.isFinite(Number(unread))) window.dispatchEvent(new CustomEvent('pms:notifications-updated', { detail: { role, unreadCount: Number(unread) } }))
         setHasMore(total != null ? page * PAGE_SIZE < Number(total) : incoming.length === PAGE_SIZE)
@@ -454,7 +466,7 @@ export default function NotificationCenter({ role }) {
       <nav className="notification-center-tabs" aria-label="Notification filters">{tabs.map(([value, label]) => <button type="button" key={value} className={tab === value ? 'is-active' : ''} aria-pressed={tab === value} onClick={() => changeTab(value)}>{label}{counts[value] != null ? <b>{counts[value]}</b> : null}</button>)}</nav>
       {error ? <div className="notification-center-error" role="alert"><p>{error}</p><button type="button" onClick={refresh}>Retry</button></div> : null}
       <div className="notification-center-list" aria-busy={loading}>
-        {items.map((item, index) => <article className={`notification-center-row is-${item.status}`} key={item.id || `missing-${index}`}><span className="notification-center-icon"><NotificationIcon send={item.status === 'sent'} /></span><div className="notification-center-copy"><h2 translate="no">{item.isPlanInquiry && <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '99px', background: '#ccfbf1', color: '#0f766e', fontSize: '10px', fontWeight: 800, marginRight: '8px' }}>Plan Inquiry</span>}{item.title}</h2><p translate="no">{item.message}</p>{(item.status === 'sent' ? item.recipient : item.sender) ? <small>{item.status === 'sent' ? 'To:' : 'From:'} <span translate="no">{item.status === 'sent' ? item.recipient : item.sender}</span></small> : null}</div><div className="notification-center-meta"><span className={`notification-center-status is-${item.status}`}>{item.status === 'sent' ? 'Sent' : item.status === 'read' ? 'Read' : 'Unread'}</span><time dateTime={item.createdAt || undefined}>{dateLabel(item.createdAt)}</time><div className="notification-center-row-actions">{isSubscriptionRequestNotification(item) ? <button type="button" className="notification-center-view-btn" onClick={() => openViewDetails(item)} title="View what the user sent regarding the plan and details"><EyeIcon />View Request</button> : null}{role === 'pharmacyAdmin' && item.status !== 'sent' ? <button type="button" disabled={busy || !item.id} onClick={() => openComposer(item)}>Forward to Pharmacist</button> : null}{item.status === 'unread' ? <button type="button" disabled={busy || !item.id} onClick={() => changeNotification('read', item.id)}>Mark as Read</button> : null}<button type="button" disabled={busy || !item.id} onClick={() => changeNotification('delete', item.id)}>Delete</button></div></div></article>)}
+        {items.map((item, index) => <article className={`notification-center-row is-${item.status}`} key={item.id || `missing-${index}`}><span className="notification-center-icon"><NotificationIcon send={item.status === 'sent'} /></span><div className="notification-center-copy"><h2 translate="no">{item.isPlanInquiry && <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '99px', background: '#ccfbf1', color: '#0f766e', fontSize: '10px', fontWeight: 800, marginRight: '8px' }}>Plan Inquiry</span>}{item.title}</h2><p translate="no">{item.message}</p>{(item.status === 'sent' ? item.recipient : item.sender) ? <small>{item.status === 'sent' ? 'To:' : 'From:'} <span translate="no">{item.status === 'sent' ? item.recipient : item.sender}</span></small> : null}</div><div className="notification-center-meta"><span className={`notification-center-status is-${item.status}`}>{item.status === 'sent' ? 'Sent' : item.status === 'read' ? 'Read' : 'Unread'}</span><time dateTime={item.createdAt || undefined}>{dateLabel(item.createdAt)}</time><div className="notification-center-row-actions">{isSubscriptionRequestNotification(item) ? <button type="button" className="notification-center-view-btn" onClick={() => openViewDetails(item)} title="View what the user sent regarding the plan and details"><EyeIcon />View Request</button> : null}{role === 'pharmacyAdmin' && item.status !== 'sent' ? <button type="button" disabled={busy || !item.id} onClick={() => openComposer(item)}>Forward to Pharmacist</button> : null}{item.status === 'unread' ? <button type="button" disabled={busy || !item.id} onClick={() => changeNotification('read', item.id)}>Mark as Read</button> : null}{role === 'superAdmin' ? <button type="button" disabled={busy || !item.id} onClick={() => changeNotification('delete', item.id)}>Delete</button> : null}</div></div></article>)}
         {loading ? <p className="notification-center-empty" role="status">Loading notifications...</p> : !error && !items.length ? <p className="notification-center-empty">No notifications available.</p> : null}
       </div>
       {!error && hasMore ? <button className="notification-center-more" type="button" disabled={loading} onClick={() => { setLoading(true); setPage((value) => value + 1) }}>Load More</button> : null}

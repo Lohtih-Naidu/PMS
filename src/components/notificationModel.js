@@ -6,14 +6,25 @@ export const NOTIFICATION_AUDIENCES = {
     ['specific-pharmacist', 'Specific Pharmacist'],
     ['specific-branch', 'Specific Branch'],
   ],
-  pharmacyAdmin: [['specific-pharmacist', 'Specific Pharmacist']],
+  pharmacyAdmin: [
+    ['all-pharmacists', 'All Pharmacists'],
+    ['specific-pharmacist', 'Specific Pharmacist'],
+  ],
   pharmacist: [],
 }
 
 export function notificationList(response) {
   if (Array.isArray(response)) return response
   if (!response || typeof response !== 'object') return []
-  for (const key of ['notifications', 'items', 'records', 'results', 'recipients', 'data']) {
+  for (const key of [
+    'notifications', 'Notifications',
+    'items', 'Items',
+    'records', 'Records',
+    'results', 'Results',
+    'recipients', 'Recipients',
+    'data', 'Data',
+    'value', 'Value',
+  ]) {
     const value = response[key]
     if (Array.isArray(value)) return value
     if (value && typeof value === 'object') {
@@ -25,24 +36,28 @@ export function notificationList(response) {
 }
 
 export function notificationBody(response) {
-  return response?.data && !Array.isArray(response.data) ? response.data : response || {}
+  if (!response || typeof response !== 'object') return {}
+  const inner = response.data ?? response.Data ?? response.value ?? response.Value
+  return inner && !Array.isArray(inner) && typeof inner === 'object' ? inner : response
 }
 
 export function normalizeNotification(item, folder = 'inbox') {
-  const id = item.id ?? item.notificationId ?? item._id
-  const state = String(item.status ?? item.state ?? '').toLowerCase()
-  const read = item.isRead ?? item.read ?? (state === 'read')
+  const id = item.id ?? item.notificationId ?? item._id ?? item.Id ?? item.NotificationId
+  const state = String(item.status ?? item.state ?? item.Status ?? '').toLowerCase()
+  const read = item.isRead ?? item.read ?? item.IsRead ?? (state === 'read')
   const sent = folder === 'sent' || state === 'sent'
   const receivedAt = [item.receivedAt, item.received_at, item.ReceivedAt, item.deliveredAt, item.delivered_at, item.DeliveredAt, item.receipt?.receivedAt, item.receipt?.deliveredAt].find((value) => value != null && value !== '')
-  const timestamp = (sent ? item.sentAt ?? item.sent_at : receivedAt) || item.createdAt || item.created_at || item.sentAt || item.timestamp || ''
+  const timestamp = (sent ? item.sentAt ?? item.sent_at ?? item.SentAt : receivedAt)
+    || item.createdAt || item.created_at || item.CreatedAt || item.CreatedOn
+    || item.sentAt || item.timestamp || item.createdDate || item.CreatedDate || item.date || ''
   return {
     id: id == null ? '' : String(id),
-    title: item.title ?? item.subject ?? 'Pharmacy System Notification',
-    message: item.message ?? item.body ?? item.content ?? item.description ?? '',
+    title: item.title ?? item.subject ?? item.Title ?? item.Subject ?? 'Pharmacy System Notification',
+    message: item.message ?? item.body ?? item.content ?? item.description ?? item.Message ?? item.Body ?? item.Content ?? '',
     status: folder === 'sent' || state === 'sent' ? 'sent' : (read === true || read === 1 || read === 'true' ? 'read' : 'unread'),
     createdAt: notificationTimestamp(timestamp),
-    sender: item.senderName ?? item.sender?.name ?? '',
-    recipient: item.recipientName ?? item.recipient?.name ?? item.audienceLabel ?? '',
+    sender: item.senderName ?? item.SenderName ?? item.sender?.name ?? item.sender ?? item.createdByName ?? item.CreatedByName ?? item.From ?? 'Pharmacy Admin',
+    recipient: item.recipientName ?? item.RecipientName ?? item.recipient?.name ?? item.audienceLabel ?? item.To ?? '',
   }
 }
 

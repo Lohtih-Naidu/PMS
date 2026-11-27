@@ -51,13 +51,8 @@ export async function submitPlanInquiry(data, options = {}) {
   }
 
   // 2. Submit to backend API: /api/public/pharmacy-subscription-requests
-  let serverResult = null
-  try {
-    const submitFn = submitPublicSubscriptionRequest || submitSubscriptionRequest
-    serverResult = await submitFn(serverPayload, options)
-  } catch (err) {
-    console.warn('Backend pharmacy-subscription-requests API call failed, falling back to local persistence:', err.message)
-  }
+  const submitFn = submitPublicSubscriptionRequest || submitSubscriptionRequest
+  const serverResult = await submitFn(serverPayload, options)
 
   const inquiry = {
     id: serverResult?.id ? `srv-inq-${serverResult.id}` : `inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -312,13 +307,7 @@ export function deleteInquiryNotification(notificationId) {
 }
 
 export async function fetchServerSubscriptionRequests(params = {}) {
-  try {
-    const res = await getSuperAdminSubscriptionRequests(params)
-    return res
-  } catch (err) {
-    console.warn('Could not fetch subscription requests from server, using local records:', err.message)
-    return getLocalInquiries()
-  }
+  return await getSuperAdminSubscriptionRequests(params)
 }
 
 export async function approveServerSubscriptionRequest(id, payload = {}) {

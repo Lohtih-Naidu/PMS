@@ -221,7 +221,7 @@ export function readPharmacistPermissions() {
 export function hasPharmacistPermission(permissions, moduleName, action = 'view') {
   if (!permissions) return true
   const canonical = canonicalModule(moduleName, PHARMACIST_MODULES)
-  if (!canonical) return true
+  if (!canonical || (canonical === 'Notifications' && action === 'view')) return true
   const normalized = normalizePermissions(permissions, PHARMACIST_MODULES)
   return Boolean(normalized[canonical]?.[action])
 }

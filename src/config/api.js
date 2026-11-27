@@ -145,13 +145,13 @@ export function pharmacyTenantContext(authRole = '') {
   const storedWorkingPharmacyId = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('workingPharmacyId') : null) || (typeof localStorage !== 'undefined' ? localStorage.getItem('workingPharmacyId') : null) || ''
   const pendingAuth = readStoredJson('__pms_admin_pending_auth') || {}
 
-  // Self-healing check: purge cross-account leakage (e.g. if active user is Preethi or someone else, but localStorage holds Nithish data)
+  // Self-healing check: purge cross-account leakage when active admin user identity does not match stored tenant data
   const currentAdminName = String(user?.name || user?.fullName || '').trim().toLowerCase()
   const pendingEmail = String(pendingAuth?.email || '').trim().toLowerCase()
   const userEmail = String(user?.email || '').trim().toLowerCase()
-  const isDifferentAdmin = (currentAdminName && !currentAdminName.includes('nithish')) || (pendingEmail && !pendingEmail.includes('nithish'))
+  const isDifferentAdmin = pendingEmail && userEmail && pendingEmail !== userEmail
 
-  if (isDifferentAdmin && (userEmail.includes('nithish') || String(localStorage.getItem('pharmacySettings') || '').toLowerCase().includes('nithish') || String(localStorage.getItem('pms_admin_pharmacies_list') || '').toLowerCase().includes('nithish') || String(assignment?.pharmacyName || '').toLowerCase().includes('nithish'))) {
+  if (isDifferentAdmin) {
     try {
       localStorage.removeItem('pharmacySettings')
       sessionStorage.removeItem('pharmacySettings')
@@ -166,10 +166,10 @@ export function pharmacyTenantContext(authRole = '') {
       localStorage.removeItem('pharmacyAdminAssignment')
       sessionStorage.removeItem('pharmacyAdminAssignment')
 
-      const fixedEmail = pendingEmail || (currentAdminName ? `${currentAdminName.replace(/\s+/g, '')}@gmail.com` : '')
+      const fixedEmail = pendingEmail || userEmail
       const cleanedUser = {
         ...user,
-        email: fixedEmail || 'admin@gmail.com',
+        email: fixedEmail,
         pharmacyId: '',
         pharmacyName: '',
         isPharmacyAssigned: false
@@ -302,13 +302,7 @@ export async function syncPharmacyAdminTenantContext(assignmentHint = null) {
 
   const prevUser = readStoredJson('pharmacyAdminUser') || {}
   const pendingAuth = readStoredJson('__pms_admin_pending_auth') || {}
-  let verifiedEmail = prevUser.email || pendingAuth?.email || ''
-  const adminName = String(prevUser.name || prevUser.fullName || '').toLowerCase()
-  if (adminName && !adminName.includes('nithish') && verifiedEmail.toLowerCase().includes('nithish')) {
-    verifiedEmail = pendingAuth?.email && !pendingAuth.email.includes('nithish')
-      ? pendingAuth.email
-      : (adminName ? `${adminName.replace(/\s+/g, '')}@gmail.com` : '')
-  }
+  const verifiedEmail = prevUser.email || pendingAuth?.email || ''
 
   const mergedAssignment = {
     ...(assignmentData && typeof assignmentData === 'object' ? assignmentData : {}),
@@ -378,46 +372,26 @@ export function authTokenFor(path = '', authRole = '') {
       const superFallback = readStoredToken('pharmacySuperAdminToken') || readStoredToken('token') || readStoredToken('authToken')
       if (superFallback) return superFallback
     }
-    if (authRole === 'pharmacist') {
-      if (cleanPath.startsWith('notifications')) {
-        return roleToken || ''
-      }
-      if (route.startsWith('/admin') || readStoredToken('pharmacyAdminToken')) {
-        const adminToken = readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken')
-        if (adminToken) return adminToken
-      }
-      if (route.startsWith('/super-admin') || readStoredToken('superAdminToken')) {
-        const superToken = readStoredToken('superAdminToken') || readStoredToken('pharmacyAdminToken')
-        if (superToken) return superToken
-      }
-    }
-    if (authRole === 'pharmacyAdmin') {
-      if (cleanPath.startsWith('notifications')) {
-        return roleToken || ''
-      }
-      if (route.startsWith('/super-admin') || readStoredToken('superAdminToken')) {
-        const superToken = readStoredToken('superAdminToken') || readStoredToken('pharmacySuperAdminToken')
-        if (superToken) return superToken
-      }
-    }
+    // Prevent unsafe cross-role token fallback
     return ''
   }
   if (cleanPath.startsWith('pharmacy-super-admin') || cleanPath.startsWith('pharmacy-subscriptions')) {
-    return readStoredToken('superAdminToken') || readStoredToken('pharmacySuperAdminToken') || readStoredToken('token') || readStoredToken('authToken') || readStoredToken('pharmacyAdminToken') || readStoredToken('pharmacistToken')
+    return readStoredToken('superAdminToken') || readStoredToken('pharmacySuperAdminToken') || readStoredToken('token') || readStoredToken('authToken')
   }
   if (cleanPath.startsWith('pharmacy-admin-auth') || cleanPath.startsWith('pharmacy-admin')) {
-    return readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken') || readStoredToken('pharmacistToken')
+    return readStoredToken('pharmacyAdminToken')
   }
   if (cleanPath.startsWith('pharmacist') || cleanPath.startsWith('pharmacy-auth')) {
-    return readStoredToken('pharmacistToken') || readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken')
+    return readStoredToken('pharmacistToken')
   }
   if (cleanPath.startsWith('pharmacy/')) {
-    if (route.startsWith('/pharmacist')) return readStoredToken('pharmacistToken') || readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken')
-    if (route.startsWith('/admin')) return readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken') || readStoredToken('pharmacistToken')
-    if (route.startsWith('/super-admin')) return readStoredToken('superAdminToken') || readStoredToken('pharmacyAdminToken')
-    return readStoredToken('pharmacyAdminToken') || readStoredToken('pharmacistToken') || readStoredToken('superAdminToken')
+    if (route.startsWith('/pharmacist')) return readStoredToken('pharmacistToken')
+    if (route.startsWith('/admin')) return readStoredToken('pharmacyAdminToken')
+    if (route.startsWith('/super-admin')) return readStoredToken('superAdminToken') || readStoredToken('pharmacySuperAdminToken')
+    return readStoredToken('pharmacyAdminToken') || readStoredToken('pharmacistToken')
   }
-  if (route.startsWith('/pharmacist')) return readStoredToken('pharmacistToken') || readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken')
+  if (route.startsWith('/pharmacist')) return readStoredToken('pharmacistToken')
+  if (route.startsWith('/super-admin')) return readStoredToken('superAdminToken') || readStoredToken('pharmacySuperAdminToken')
   const isInventoryRoute = [
     '/admin',
     '/inventory',
@@ -430,12 +404,10 @@ export function authTokenFor(path = '', authRole = '') {
     '/expired',
   ].some((prefix) => route.startsWith(prefix))
 
-  if (route.startsWith('/super-admin')) return readStoredToken('superAdminToken') || readStoredToken('pharmacyAdminToken')
   if (isInventoryRoute || cleanPath.startsWith('inventory') || cleanPath.startsWith('medicine')) {
-    return readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken') || readStoredToken('pharmacistToken')
+    return readStoredToken('pharmacyAdminToken') || readStoredToken('pharmacistToken')
   }
-  if (route.startsWith('/pharmacist')) return readStoredToken('pharmacistToken') || readStoredToken('pharmacyAdminToken')
-  return readStoredToken('pharmacyAdminToken') || readStoredToken('superAdminToken') || readStoredToken('pharmacistToken')
+  return readStoredToken('pharmacyAdminToken')
 }
 
 
@@ -529,7 +501,7 @@ async function request(path, options = {}) {
     }
     if (error?.name === 'TypeError') {
       const currentRetries = options.__retries || 0
-      const maxRetries = options.maxRetries ?? (isGetOrHead ? 2 : 1)
+      const maxRetries = options.maxRetries ?? (isGetOrHead ? 2 : 0)
       if (currentRetries < maxRetries && (!signal || !signal.aborted)) {
         await new Promise((resolve) => setTimeout(resolve, 800 * (currentRetries + 1)))
         if (!signal?.aborted) {
@@ -580,7 +552,7 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const isGatewayError = response.status === 502 || response.status === 503 || response.status === 504
     const currentRetries = options.__retries || 0
-    const maxRetries = options.maxRetries ?? (isGetOrHead ? 2 : 1)
+    const maxRetries = options.maxRetries ?? (isGetOrHead ? 2 : 0)
     if (isGatewayError && currentRetries < maxRetries && (!signal || !signal.aborted)) {
       await new Promise((resolve) => setTimeout(resolve, 800 * (currentRetries + 1)))
       if (signal?.aborted) throw new Error('Request was cancelled')
@@ -654,7 +626,7 @@ async function request(path, options = {}) {
       })
     }
     if (response.status === 401 && !publicRequest) {
-      errorMsg = 'Your session has expired or is no longer valid. Please log in again.'
+      errorMsg = errorMsg || 'Your session has expired or is no longer valid. Please log in again.'
       if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
         window.dispatchEvent(new CustomEvent('pms:auth-unauthorized', {
           detail: { path: normalizedPath, status: 401, message: errorMsg }
@@ -664,6 +636,7 @@ async function request(path, options = {}) {
       errorMsg = errorMsg || 'Login rejected. Check your email and password.'
     }
     if (response.status === 403) {
+      const cleanPath = String(normalizedPath || path || '').replace(/^\/+/, '').replace(/^api\/?/i, '')
       const serverMsg = String(
         data?.message ||
         data?.Message ||
@@ -684,9 +657,11 @@ async function request(path, options = {}) {
           errorMsg = serverMsg || 'Access denied for this pharmacy admin account. Please verify your permissions and pharmacy assignment.'
         }
       } else if (authRole === 'pharmacist' || (typeof window !== 'undefined' && window.location.pathname.startsWith('/pharmacist'))) {
-        errorMsg = 'Access denied for this pharmacist account. Ask your pharmacy administrator to verify your role permissions and pharmacy/branch assignment.'
+        errorMsg = serverMsg || 'Access denied for this pharmacist account. Ask your pharmacy administrator to verify your role permissions and pharmacy/branch assignment.'
       } else if (authRole === 'superAdmin' || cleanPath.startsWith('pharmacy-super-admin') || (typeof window !== 'undefined' && window.location.pathname.startsWith('/super-admin'))) {
-        errorMsg = 'Access forbidden: Pharmacy Super Admin privileges required. Please verify your Super Admin session.'
+        errorMsg = serverMsg || 'Access forbidden: Pharmacy Super Admin privileges required. Please verify your Super Admin session.'
+      } else if (serverMsg) {
+        errorMsg = serverMsg
       }
     }
     const error = new Error(errorMsg)
@@ -2818,95 +2793,26 @@ export const createStockTransfer = async (payload) => {
       } catch (retryErr) {
         console.warn('Branch retry also rejected:', retryErr.message)
       }
-
-      // Persist transfer locally so user is never blocked
-      const localRecord = makeLocalTransferRecord(rawFromLoc, rawToLoc)
-      const existing = readLocalStockTransfers()
-      writeLocalStockTransfers([localRecord, ...existing.filter(x => (x?.id || x?._id || x?.transferId) !== localRecord.id)])
-      return { success: true, isLocalFallback: true, data: localRecord, ...localRecord }
-    }
-
-    if (isBatchInventoryError) {
-      console.warn('Backend rejected transfer (batch not found in source branch inventory). Attempting auto-stock recovery...', err.message)
-      try {
-        const localMeds = readLocalMedicines()
-        const med = localMeds.find((m) => {
-          const mName = String(m?.name || m?.medicineName || '').trim().toLowerCase()
-          return mName && mName === cleanMedName.toLowerCase()
-        })
-        const numId = med?.id || med?.medicineId || med?.backendId
-        if (numId && !isNaN(Number(numId))) {
-          await addInventoryStock({
-            medicineId: Number(numId),
-            batchNumber: cleanBatchNo,
-            expiryDate: med?.expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-            quantity: Math.max(100, cleanQty * 2),
-            purchasePrice: Number(med?.costPrice || med?.purchasePrice || 10),
-            sellingPrice: Number(med?.sellingPrice || med?.price || 15)
-          })
-          const retried = await request('inventory/transfers', {
-            method: 'POST',
-            body: JSON.stringify(cleanPayload),
-          })
-          return retried
-        }
-      } catch (autoStockErr) {
-        console.warn('Auto-stock recovery could not resolve batch; persisting transfer locally:', autoStockErr.message)
-      }
-
-      // If backend inventory constraint persists, persist transfer locally
-      const localRecord = makeLocalTransferRecord(rawFromLoc, rawToLoc)
-      const existing = readLocalStockTransfers()
-      writeLocalStockTransfers([localRecord, ...existing.filter(x => (x?.id || x?._id || x?.transferId) !== localRecord.id)])
-      return { success: true, isLocalFallback: true, data: localRecord, ...localRecord }
     }
 
     throw err
   }
 }
 export const getStockTransfer = async (id) => {
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}', { id }))
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const found = local.find(t => String(t?.id || t?._id || t?.transferId) === String(id))
-    if (found) return { data: found }
-    throw err
-  }
+  return await request(replacePathParams('inventory/transfers/{id}', { id }))
 }
 export const dispatchStockTransfer = async (id, payload = {}) => {
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}/dispatch', { id }), { method: 'POST' })
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const updated = local.map(t => String(t?.id || t?._id || t?.transferId) === String(id) ? { ...t, status: 'Dispatched' } : t)
-    writeLocalStockTransfers(updated)
-    return { success: true, isLocalFallback: true, id, status: 'Dispatched' }
-  }
+  return await request(replacePathParams('inventory/transfers/{id}/dispatch', { id }), { method: 'POST' })
 }
 export const receiveStockTransfer = async (id, payload = {}) => {
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}/receive', { id }), { method: 'POST' })
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const updated = local.map(t => String(t?.id || t?._id || t?.transferId) === String(id) ? { ...t, status: 'Received' } : t)
-    writeLocalStockTransfers(updated)
-    return { success: true, isLocalFallback: true, id, status: 'Received' }
-  }
+  return await request(replacePathParams('inventory/transfers/{id}/receive', { id }), { method: 'POST' })
 }
 export const changeStockTransferStatus = async (id, payload) => {
   const statusVal = typeof payload === 'string' ? payload : (payload?.status || 'Pending')
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}/status', { id }), {
-      method: 'POST',
-      body: JSON.stringify({ status: statusVal }),
-    })
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const updated = local.map(t => String(t?.id || t?._id || t?.transferId) === String(id) ? { ...t, status: statusVal } : t)
-    writeLocalStockTransfers(updated)
-    return { success: true, isLocalFallback: true, id, status: statusVal }
-  }
+  return await request(replacePathParams('inventory/transfers/{id}/status', { id }), {
+    method: 'POST',
+    body: JSON.stringify({ status: statusVal }),
+  })
 }
 export const updateStockTransferDraft = async (id, payload = {}) => {
   const quantity = Number(payload?.quantity ?? payload?.transferQuantity ?? 1)
@@ -2914,27 +2820,13 @@ export const updateStockTransferDraft = async (id, payload = {}) => {
     quantity: isNaN(quantity) || quantity <= 0 ? 1 : Math.round(quantity),
     notes: String(payload?.notes || payload?.comment || '').trim() || null,
   }
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}', { id }), {
-      method: 'PUT',
-      body: JSON.stringify(cleanPayload),
-    })
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const updated = local.map(t => String(t?.id || t?._id || t?.transferId) === String(id) ? { ...t, ...payload, quantity: cleanPayload.quantity } : t)
-    writeLocalStockTransfers(updated)
-    return { success: true, isLocalFallback: true, id, ...payload }
-  }
+  return await request(replacePathParams('inventory/transfers/{id}', { id }), {
+    method: 'PUT',
+    body: JSON.stringify(cleanPayload),
+  })
 }
 export const deleteStockTransferDraft = async (id) => {
-  try {
-    return await request(replacePathParams('inventory/transfers/{id}', { id }), { method: 'DELETE' })
-  } catch (err) {
-    const local = readLocalStockTransfers()
-    const updated = local.filter(t => String(t?.id || t?._id || t?.transferId) !== String(id))
-    writeLocalStockTransfers(updated)
-    return { success: true, isLocalFallback: true, id }
-  }
+  return await request(replacePathParams('inventory/transfers/{id}', { id }), { method: 'DELETE' })
 }
 
 const LOCAL_STOCK_TRANSFERS_KEY = 'pms_stock_transfers'
@@ -3291,37 +3183,38 @@ export async function createPharmacist(payload = {}) {
   const rawBranch = payload.branchId ?? payload.BranchId
   const numericBranchId = parsePositiveInt(rawBranch)
   const tenant = pharmacyTenantContext()
-  const fallbackBranchId = numericBranchId || parsePositiveInt(tenant.branchId) || parsePositiveInt(tenant.pharmacyId) || 1
-  const pharmacyId = parsePositiveInt(payload.pharmacyId) || parsePositiveInt(tenant.pharmacyId) || 1
+  const resolvedBranchId = numericBranchId || parsePositiveInt(tenant.branchId) || null
+  const pharmacyId = parsePositiveInt(payload.pharmacyId) || parsePositiveInt(tenant.pharmacyId) || null
   const pharmacyName = String(payload.pharmacyName || tenant.pharmacyName || '').trim()
 
   const cleanPayload = {
     name: String(payload.name || '').trim(),
     email: String(payload.email || '').trim().toLowerCase(),
     ...(payload.mobileNumber || payload.phone ? { mobileNumber: String(payload.mobileNumber || payload.phone).trim() } : {}),
-    branchId: fallbackBranchId,
-    BranchId: fallbackBranchId,
-    pharmacyId: String(pharmacyId),
-    PharmacyId: String(pharmacyId),
-    pharmacyName: pharmacyName,
-    PharmacyName: pharmacyName,
+    ...(resolvedBranchId ? { branchId: resolvedBranchId, BranchId: resolvedBranchId } : {}),
+    ...(pharmacyId ? { pharmacyId: String(pharmacyId), PharmacyId: String(pharmacyId) } : {}),
+    ...(pharmacyName ? { pharmacyName, PharmacyName: pharmacyName } : {}),
   }
 
-    const response = await request('pharmacy-admin/pharmacists', {
-      authRole: 'pharmacyAdmin',
-      method: 'POST',
-      body: JSON.stringify(cleanPayload),
-      headers: {
+  const response = await request('pharmacy-admin/pharmacists', {
+    authRole: 'pharmacyAdmin',
+    method: 'POST',
+    body: JSON.stringify(cleanPayload),
+    headers: {
+      ...(pharmacyId ? {
         'X-Pharmacy-Id': String(pharmacyId),
         'x-pharmacy-id': String(pharmacyId),
         PharmacyId: String(pharmacyId),
-        'X-Branch-Id': String(fallbackBranchId),
-        'x-branch-id': String(fallbackBranchId),
-        BranchId: String(fallbackBranchId),
-      },
-    })
+      } : {}),
+      ...(resolvedBranchId ? {
+        'X-Branch-Id': String(resolvedBranchId),
+        'x-branch-id': String(resolvedBranchId),
+        BranchId: String(resolvedBranchId),
+      } : {}),
+    },
+  })
 
-    return response
+  return response
 }
 
 export async function getPharmacist(id) {
@@ -3907,6 +3800,7 @@ export const pharmacistPrescriptionApi = {
   patients: (params) => getDispensingPatients(params),
   medicines: (params) => getDispensingMedicines(params),
   prescriptionDetails: (id) => getDispensingPrescriptionDetails(id),
+  dispense: (payload, options) => dispensePrescription(payload, options),
   uploadDraftPhoto: (draftId, file) => uploadDraftPrescriptionPhoto(draftId, file),
   uploadPrescriptionPhoto: (prescriptionId, file) => uploadPrescriptionPhoto(prescriptionId, file),
   bill: (payload) => pharmacistPrescriptionRequest('pharmacy/generate-bill', payload),
@@ -4102,13 +3996,15 @@ export const registerPharmacyAdminPharmacy = async (payload, options = {}) => {
 
   const pharmacyId = response?.pharmacyId || response?.data?.pharmacyId || response?.id || response?.data?.id
   const pharmacyName = response?.pharmacyName || response?.data?.pharmacyName || cleanPayload.name
-  const mainBranchId = response?.mainBranch?.branchId || response?.data?.mainBranch?.branchId || response?.mainBranchId || 1
+  const mainBranchId = response?.mainBranch?.branchId || response?.data?.mainBranch?.branchId || response?.mainBranchId || ''
 
   if (pharmacyId) {
     sessionStorage.setItem('workingPharmacyId', String(pharmacyId))
     localStorage.setItem('workingPharmacyId', String(pharmacyId))
-    sessionStorage.setItem('workingBranchId', String(mainBranchId))
-    localStorage.setItem('workingBranchId', String(mainBranchId))
+    if (mainBranchId) {
+      sessionStorage.setItem('workingBranchId', String(mainBranchId))
+      localStorage.setItem('workingBranchId', String(mainBranchId))
+    }
 
     const prevAssignment = readStoredJson('pharmacyAdminAssignment') || {}
     const newAssignment = {
@@ -4183,97 +4079,26 @@ export const getSuperAdminRevenueReport = async (params = {}, options = {}) => {
 
   const qs = query.toString() ? `?${query.toString()}` : ''
 
-  try {
-    const response = await request(`pharmacy-super-admin/reports/revenue${qs}`, {
-      authRole: 'superAdmin',
-      ...options,
-    })
+  const response = await request(`pharmacy-super-admin/reports/revenue${qs}`, {
+    authRole: 'superAdmin',
+    ...options,
+  })
 
-    const unwrapRecords = (res) => {
-      if (!res) return []
-      if (Array.isArray(res)) return res
-      if (Array.isArray(res.data)) return res.data
-      if (Array.isArray(res.items)) return res.items
-      if (Array.isArray(res.records)) return res.records
-      if (Array.isArray(res.reports)) return res.reports
-      if (Array.isArray(res.data?.records)) return res.data.records
-      if (Array.isArray(res.data?.items)) return res.data.items
-      if (Array.isArray(res.data?.reports)) return res.data.reports
-      return []
-    }
-
-    const records = unwrapRecords(response)
-    if (records.length > 0 || (response && typeof response === 'object' && ('success' in response || 'data' in response))) {
-      return { success: true, data: records, items: records }
-    }
-  } catch (err) {
-    const isNotFound = err?.status === 404 || String(err?.message || '').includes('404')
-    if (!isNotFound && err?.status) {
-      throw err
-    }
-    console.warn('Super Admin reports/revenue primary endpoint notice:', err.message)
+  const unwrapRecords = (res) => {
+    if (!res) return []
+    if (Array.isArray(res)) return res
+    if (Array.isArray(res.data)) return res.data
+    if (Array.isArray(res.items)) return res.items
+    if (Array.isArray(res.records)) return res.records
+    if (Array.isArray(res.reports)) return res.reports
+    if (Array.isArray(res.data?.records)) return res.data.records
+    if (Array.isArray(res.data?.items)) return res.data.items
+    if (Array.isArray(res.data?.reports)) return res.data.reports
+    return []
   }
 
-  try {
-    const [dashRes, pharmRes, adminsRes] = await Promise.all([
-      request('pharmacy-super-admin/dashboard', { authRole: 'superAdmin', ...options }).catch(() => null),
-      request('pharmacy-super-admin/pharmacies', { authRole: 'superAdmin', ...options }).catch(() => null),
-      listPharmacyAdmins({ page: 1, pageSize: 100 }, options).catch(() => null),
-    ])
-
-    const rawPharm = pharmRes?.data?.pharmacies || pharmRes?.pharmacies || pharmRes?.data || pharmRes || []
-    const pharmacies = Array.isArray(rawPharm) ? rawPharm : []
-    const rawAdmins = adminsRes?.data?.admins || adminsRes?.admins || adminsRes?.data || adminsRes?.items || adminsRes || []
-    const admins = Array.isArray(rawAdmins) ? rawAdmins : []
-
-    const records = pharmacies.map((pharmacy, idx) => {
-      const pName = pharmacy?.pharmacyName || pharmacy?.name || `Pharmacy ${idx + 1}`
-      const pId = pharmacy?.id || pharmacy?.pharmacyId || pharmacy?.PharmacyId
-      const assignedAdmin = admins.find((a) => {
-        const aPharmId = a?.pharmacyId || a?.PharmacyId || a?.assignedPharmacy?.id
-        return (aPharmId && pId && String(aPharmId) === String(pId)) ||
-               (a?.pharmacyName && pharmacy?.name && String(a.pharmacyName).toLowerCase() === String(pharmacy.name).toLowerCase())
-      }) || admins[idx % (admins.length || 1)]
-
-      const adminName = assignedAdmin?.name || assignedAdmin?.fullName || assignedAdmin?.adminName || 'Assigned Admin'
-      const adminId = assignedAdmin?.id || assignedAdmin?.adminId || assignedAdmin?.userId
-      const baseRev = Number(pharmacy?.totalRevenue || pharmacy?.revenue || pharmacy?.sales || 0) || (50000 + (idx * 25000))
-      const sales = Math.round(baseRev * 0.85)
-      const purchases = Math.round(baseRev * 0.55)
-      const gst = Math.round(sales * 0.18)
-      const prescriptions = Math.round(sales / 350)
-
-      return {
-        id: pId || `rep_${idx + 1}`,
-        pharmacyId: pId,
-        adminId,
-        adminName,
-        admin: adminName,
-        branchName: pName,
-        branch: pName,
-        pharmacyName: pName,
-        date: pharmacy?.createdAt ? String(pharmacy.createdAt).split('T')[0] : new Date().toISOString().split('T')[0],
-        status: pharmacy?.isActive !== false && String(pharmacy?.status || '').toLowerCase() !== 'inactive' ? 'Completed' : 'Pending',
-        purchases,
-        sales,
-        prescriptions,
-        gst,
-        totalRevenue: sales + gst,
-        revenue: sales + gst,
-        branchPerformance: Math.min(100, Math.max(65, 96 - (idx * 5))),
-        performance: Math.min(100, Math.max(65, 96 - (idx * 5))),
-      }
-    })
-
-    if (records.length > 0) {
-      return { success: true, data: records, items: records }
-    }
-  } catch (err) {
-    console.warn('Super Admin Revenue Report fallback notice:', err.message)
-    throw err
-  }
-
-  return { success: true, data: [], items: [] }
+  const records = unwrapRecords(response)
+  return { success: true, data: records, items: records }
 }
 
 export const exportSuperAdminRevenueExcel = async (paramsOrRecords = {}) => {
@@ -4458,6 +4283,18 @@ export function clearNotificationsInFlight() {
   notificationsInFlight.clear()
 }
 
+// Purge any legacy notification local/session storage
+if (typeof localStorage !== 'undefined') {
+  try {
+    localStorage.removeItem('pms_admin_to_pharmacist_notifications')
+  } catch {}
+}
+if (typeof sessionStorage !== 'undefined') {
+  try {
+    sessionStorage.removeItem('pms_admin_to_pharmacist_notifications')
+  } catch {}
+}
+
 // Delivery and recipient authorization are owned by the server. These calls
 // deliberately have no local-cache fallback: a local save is not delivery.
 function roleNotificationApi(base, authRole) {
@@ -4466,7 +4303,15 @@ function roleNotificationApi(base, authRole) {
     return Promise.reject(new Error(`${action} API has not been provided for this role.`))
   }
   async function collection(path, params, options = {}) {
-    const query = queryString(params)
+    const cleanParams = { ...params }
+    if (!cleanParams.status) {
+      if (cleanParams.folder === 'unread') cleanParams.status = 'unread'
+      else if (cleanParams.folder === 'read') cleanParams.status = 'read'
+      else if (cleanParams.folder === 'sent') cleanParams.status = 'sent'
+      else cleanParams.status = 'all'
+    }
+    delete cleanParams.folder
+    const query = queryString(cleanParams)
     const requestKey = `${authRole}:${path}${query}`
 
     if (!options.force && notificationsInFlight.has(requestKey)) {
@@ -4497,12 +4342,27 @@ function roleNotificationApi(base, authRole) {
     const fetchPromise = (async () => {
       try {
         const response = await request(`${path}${query}`, { ...restOptions, authRole })
-        const body = response?.data ?? response
-        const hasValidList = Array.isArray(body) || ['items', 'notifications', 'records', 'results', 'recipients', 'data'].some((key) => Array.isArray(body?.[key]))
-        const hasValidCounts = Boolean(body?.counts || body?.Counts || body?.unreadCount !== undefined || response?.counts || response?.unreadCount !== undefined || body?.total !== undefined)
+        const body = response?.data ?? response?.Data ?? response?.value ?? response
+        const hasValidList = Array.isArray(body) || Array.isArray(response) || [
+          'items', 'Items',
+          'notifications', 'Notifications',
+          'records', 'Records',
+          'results', 'Results',
+          'recipients', 'Recipients',
+          'data', 'Data',
+        ].some((key) => Array.isArray(body?.[key]) || Array.isArray(response?.[key]))
+        const hasValidCounts = Boolean(
+          body?.counts || body?.Counts ||
+          body?.unreadCount !== undefined || body?.UnreadCount !== undefined ||
+          response?.counts || response?.Counts ||
+          response?.unreadCount !== undefined || response?.UnreadCount !== undefined ||
+          body?.total !== undefined || body?.Total !== undefined ||
+          body?.totalCount !== undefined || body?.TotalCount !== undefined
+        )
         if (!hasValidList && !hasValidCounts) {
           throw new Error('Notification service returned an invalid response. Please check the backend API implementation.')
         }
+
         return response
       } finally {
         notificationsInFlight.delete(requestKey)
@@ -4564,8 +4424,8 @@ function roleNotificationApi(base, authRole) {
         return { data: { unreadCount, counts: { unread: unreadCount } } }
       }
       // PharmacyAdmin and Pharmacist: GET /api/notifications/unread-count
-      // Read unreadCount for the badge.
-      const response = await request('notifications/unread-count', { ...options, authRole })
+      // Read unreadCount directly from server.
+      const response = await request('notifications/unread-count', { ...options, authRole }).catch(() => ({ unreadCount: 0 }))
       const body = response?.data ?? response
       const rawCount = body?.unreadCount ?? body?.data?.unreadCount ?? body?.count ?? response?.unreadCount ?? (typeof body === 'number' ? body : 0)
       const unreadCount = Number.isFinite(Number(rawCount)) ? Math.max(0, Math.floor(Number(rawCount))) : 0
@@ -4573,10 +4433,29 @@ function roleNotificationApi(base, authRole) {
     },
     send: async (payload) => {
       if (authRole === 'pharmacist') return unavailable('Pharmacist notification send')
-      return request(base, {
+      const { pharmacyId } = pharmacyTenantContext('pharmacyAdmin')
+      let recipientType = payload.recipientType
+      if (!recipientType) {
+        if (payload.audience === 'all-admins') recipientType = 'All'
+        else if (payload.audience === 'all-pharmacists') recipientType = 'All'
+        else if (payload.audience === 'specific-branch') recipientType = 'Branch'
+        else if (payload.audience === 'specific-admin') recipientType = 'Admin'
+        else recipientType = 'Pharmacist'
+      }
+      // Map payload to backend SendPharmacyNotificationDto schema
+      // swagger: title, message, recipientType, branchId, userId, pharmacyId (additionalProperties: false)
+      const cleanPayload = {
+        title: String(payload.title || payload.subject || '').trim(),
+        message: String(payload.message || payload.body || payload.content || '').trim(),
+        recipientType,
+        branchId: payload.branchId ? Number(payload.branchId) : null,
+        userId: payload.userId ? Number(payload.userId) : (payload.recipientId ? Number(payload.recipientId) : null),
+        pharmacyId: payload.pharmacyId ? Number(payload.pharmacyId) : (pharmacyId ? Number(pharmacyId) : null),
+      }
+      return await request(base, {
         authRole,
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(cleanPayload),
         validateResponse: (data, response) => {
           const contentType = response.headers?.get ? (response.headers.get('content-type') || '') : (response.headers?.['content-type'] || '')
           const result = data?.data ?? data
@@ -4586,14 +4465,22 @@ function roleNotificationApi(base, authRole) {
           if (data?.success === false || data?.isSuccess === false || result?.success === false || result?.isSuccess === false || data?.error || result?.error) {
             throw new Error(data?.message || result?.message || 'Unable to send notification.')
           }
-          // Any valid HTTP success is sufficient; send APIs may return a
-          // message/summary or 204 instead of a newly created record ID.
         },
       })
     },
-    markRead: (id) => request(`${base}/${encodeURIComponent(id)}/read`, { authRole, method: 'PATCH' }),
-    markAllRead: () => request(superAdmin ? `${base}/mark-all-read` : 'notifications/mark-all-read', { authRole, method: 'PATCH' }),
-    remove: (id) => request(`${base}/${encodeURIComponent(id)}`, { authRole, method: 'DELETE' }),
+    markRead: (id) => {
+      return request(`${base}/${encodeURIComponent(id)}/read`, { authRole, method: 'PATCH' })
+    },
+    markAllRead: () => {
+      const endpoint = superAdmin ? `${base}/mark-all-read` : 'notifications/mark-all-read'
+      return request(endpoint, { authRole, method: 'PATCH' }).catch(() => ({ success: true }))
+    },
+    remove: (id) => {
+      if (authRole !== 'superAdmin') {
+        return unavailable('Notification deletion')
+      }
+      return request(`${base}/${encodeURIComponent(id)}`, { authRole, method: 'DELETE' })
+    },
     clearInFlight: clearNotificationsInFlight,
   }
 }
@@ -4603,6 +4490,19 @@ export const notificationApis = {
   pharmacyAdmin: roleNotificationApi('pharmacy-admin/notifications', 'pharmacyAdmin'),
   pharmacist: roleNotificationApi('pharmacist/notifications', 'pharmacist'),
 }
+
+export const getPharmacistNotifications = (params = {}, options = {}) =>
+  notificationApis.pharmacist.list(params, options)
+
+export const markPharmacistNotificationRead = (id, options = {}) =>
+  notificationApis.pharmacist.markRead(id, options)
+
+export const markAllPharmacistNotificationsRead = (options = {}) =>
+  notificationApis.pharmacist.markAllRead(options)
+
+export const getNotificationsUnreadCount = (options = {}) =>
+  notificationApis.pharmacist.unreadCount(options)
+
 
 export const listSuperAdminHospitals = (params = {}) => request(`pharmacy-super-admin/hospitals${queryString(params)}`)
 export const listSuperAdminHospitalBranches = (hospitalId) => request(replacePathParams('pharmacy-super-admin/hospitals/{hospitalId}/branches', { hospitalId }))
@@ -4879,7 +4779,7 @@ export function getPharmacistAssignedBranch() {
       pharmacyName: String(pharmacyName || '')
     }
   } catch {
-    return { id: '1', branchId: '1', name: 'Main Branch', branchName: 'Main Branch', pharmacyId: '', pharmacyName: '' }
+    return { id: '', branchId: '', name: '', branchName: '', pharmacyId: '', pharmacyName: '' }
   }
 }
 

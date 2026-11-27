@@ -199,12 +199,7 @@ function Login() {
       const rawUser = loginData?.user || response?.user || {}
 
       let adminName = String(rawUser.name || rawUser.fullName || '').trim()
-      if (/pharmacy/i.test(adminName) || (!credentials.email.includes('nithish') && /nithish/i.test(adminName)) || (!credentials.email.includes('raju') && /raju/i.test(adminName))) {
-        adminName = ''
-      }
-      if (credentials.email.includes('venkatagoutham') || credentials.email.includes('goutham')) {
-        adminName = 'Venkata Goutham'
-      } else if (!adminName && credentials.email) {
+      if (!adminName && credentials.email) {
         const prefix = credentials.email.split('@')[0].replace(/[0-9._-]+$/, '')
         adminName = prefix ? prefix.charAt(0).toUpperCase() + prefix.slice(1) : 'Admin'
       }

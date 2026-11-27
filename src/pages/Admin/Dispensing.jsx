@@ -173,11 +173,6 @@ export default function Dispensing() {
         ? item.medicines
         : (item?.medicineName ? [{ medicineName: item.medicineName, quantity: item.quantity || 1 }] : [])
 
-      // Auto-deduct stock for each medicine dispensed
-      meds.forEach(m => {
-        deductMedicineStock(m, Number(m?.quantity || m?.qty || 1), 'dispense')
-      })
-
       const response = await dispensePrescription({
         prescriptionId: Number(id) || id,
         medicines: meds.map((medicine) => ({
@@ -185,6 +180,11 @@ export default function Dispensing() {
           quantity: Number(medicine.quantity || 1),
           medicineName: medicine.medicineName || medicine.name
         }))
+      })
+
+      // Auto-deduct stock for each medicine dispensed only after backend confirmation
+      meds.forEach(m => {
+        deductMedicineStock(m, Number(m?.quantity || m?.qty || 1), 'dispense')
       })
 
       // Update dispensing status on the item
@@ -222,28 +222,24 @@ export default function Dispensing() {
 
     setLoading(true)
     try {
-      // 1. Deduct stock in real-time
-      deductMedicineStock(targetMed, qty, 'dispense')
+      // 1. Call backend dispense first
+      const response = await dispensePrescription({
+        patientName: giveForm.patientName,
+        medicines: [{
+          medicineId: targetMed.id || targetMed._id,
+          medicineName: targetMed.name || targetMed.medicineName,
+          quantity: qty
+        }]
+      })
 
-      // 2. Call backend dispense
-      try {
-        await dispensePrescription({
-          patientName: giveForm.patientName,
-          medicines: [{
-            medicineId: targetMed.id || targetMed._id,
-            medicineName: targetMed.name || targetMed.medicineName,
-            quantity: qty
-          }]
-        })
-      } catch (err) {
-        console.warn('Backend dispensePrescription notice:', err.message)
-      }
+      // 2. Deduct stock in real-time only after backend confirmation
+      deductMedicineStock(targetMed, qty, 'dispense')
 
       // 3. Add record to local items so it reflects immediately in table
       const price = Number(targetMed.sellingPrice || targetMed.price || targetMed.mrp || 0)
       const newRecord = {
-        _id: `disp_${Date.now()}`,
-        prescriptionId: `RX-${Math.floor(1000 + Math.random() * 9000)}`,
+        _id: response?.id ? `disp_${response.id}` : `disp_${Date.now()}`,
+        prescriptionId: response?.prescriptionId || `RX-${Math.floor(1000 + Math.random() * 9000)}`,
         patientName: giveForm.patientName,
         medicines: [{
           medicineName: targetMed.name || targetMed.medicineName,
@@ -258,7 +254,7 @@ export default function Dispensing() {
       }
       setItems(prev => [newRecord, ...prev])
 
-      showToast(`Successfully dispensed ${qty} unit(s) of ${targetMed.name || targetMed.medicineName}! Stock reduced.`)
+      showToast(response?.message || `Successfully dispensed ${qty} unit(s) of ${targetMed.name || targetMed.medicineName}! Stock reduced.`)
       setGiveModalOpen(false)
       setGiveForm({
         patientName: '',

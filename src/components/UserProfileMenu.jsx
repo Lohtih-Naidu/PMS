@@ -56,27 +56,13 @@ function getProfile(roleType) {
     const assignment = readUser(['pharmacyAdminAssignment'])
     const pendingAuth = readUser(['__pms_admin_pending_auth'])
 
-    let cleanEmail = String(user?.email || pendingAuth?.email || '').trim().toLowerCase()
-    // Sanitize cross-session contamination (e.g. Preethi logged in, but old nithish email was stored)
-    if (cleanEmail.includes('nithish') && pendingAuth?.email && !pendingAuth.email.includes('nithish')) {
-      cleanEmail = pendingAuth.email.trim().toLowerCase()
-    }
-
-    let rawName = String(user?.name || user?.fullName || '').trim()
-    // If rawName contains "pharmacy" or matches any pharmacy name or contains "nithish"/"raju" (when email is not nithish/raju), it is NOT the admin's personal name!
-    if (/pharmacy/i.test(rawName) || (!cleanEmail.includes('nithish') && /nithish/i.test(rawName)) || (!cleanEmail.includes('raju') && /raju/i.test(rawName))) {
-      rawName = ''
-    }
-
-    // Derive personal display name from email
-    let displayName = rawName
-    if (cleanEmail.includes('venkatagoutham') || cleanEmail.includes('goutham')) {
-      displayName = 'Venkata Goutham'
-    } else if (!displayName && cleanEmail) {
+    const cleanEmail = String(user?.email || pendingAuth?.email || '').trim().toLowerCase()
+    let rawName = String(user?.name || user?.fullName || assignment?.adminName || '').trim()
+    if (!rawName && cleanEmail) {
       const emailPrefix = cleanEmail.split('@')[0].replace(/[0-9._-]+$/, '')
-      displayName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin'
+      rawName = emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : ''
     }
-    if (!displayName) displayName = 'Admin'
+    const displayName = rawName || 'Admin'
 
     // Auto-heal stored pharmacyAdminUser so stale names like "Raju" or wrong emails are replaced immediately
     if (user && (user.name !== displayName || user.email !== cleanEmail)) {

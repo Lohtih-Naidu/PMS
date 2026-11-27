@@ -10,7 +10,10 @@ import {
   getNearExpiryInventoryDetails,
   dispensePrescription,
   getPharmacyPrescription,
+  notificationApis,
+  markPharmacistNotificationRead,
 } from '../../config/api'
+import { useNotificationCount } from '../../services/notificationManager'
 import { useToast } from '../../components/ToastProvider'
 import PharmacistLayout from './PharmacistLayout'
 import DashboardGreetingCard from '../../components/DashboardGreetingCard'
@@ -20,7 +23,13 @@ const unwrap = (value) => value?.data?.dashboard || value?.data || value?.dashbo
 const field = (object, keys) => keys.map((key) => key.split('.').reduce((value, part) => value?.[part], object)).find((value) => value !== undefined && value !== null)
 const rows = (value, keys = []) => {
   if (Array.isArray(value)) return value
-  for (const key of [...keys, 'items', 'results', 'records', 'data']) {
+  const target = value?.data && !Array.isArray(value.data) ? value.data : (value?.Data && !Array.isArray(value.Data) ? value.Data : value)
+  if (Array.isArray(target)) return target
+  const checkKeys = [...keys, 'items', 'Items', 'notifications', 'Notifications', 'results', 'Results', 'records', 'Records', 'data', 'Data']
+  for (const key of checkKeys) {
+    if (Array.isArray(target?.[key])) return target[key]
+  }
+  for (const key of checkKeys) {
     if (Array.isArray(value?.[key])) return value[key]
   }
   return []
@@ -41,6 +50,7 @@ const sources = [
   () => pharmacistReturnsApi.list({ page: 1, pageSize: 20 }),
   () => getPharmacyDispensingOverview(),
   () => getNearExpiryInventoryDetails({ days: 30 }),
+  () => notificationApis.pharmacist.list({ page: 1, pageSize: 10 }),
 ]
 
 function Icon({ name }) {
@@ -53,12 +63,25 @@ function Icon({ name }) {
     stock: 'm12 2 10 5v10l-10 5-10-5V7z M2 7l10 5 10-5 M12 12v10',
     chart: 'M3 3v18h18 M7 16l5-6 4 3 5-8',
     clock: 'M12 8v5l4 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+    bell: 'M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 0 1-3.46 0',
   }
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.stock} /></svg>
 }
 
-function Panel({ title, icon, to, children, className = '' }) {
-  return <section className={`pd-panel ${className}`}><div className="pd-panel-heading"><h2><Icon name={icon} />{title}</h2>{to && <Link to={to}>View all →</Link>}</div>{children}</section>
+function Panel({ title, icon, to, badge, children, className = '' }) {
+  return (
+    <section className={`pd-panel ${className}`}>
+      <div className="pd-panel-heading">
+        <h2>
+          <Icon name={icon} />
+          {title}
+          {badge ? <span className="pd-notif-panel-header-badge">{badge}</span> : null}
+        </h2>
+        {to && <Link to={to}>View all →</Link>}
+      </div>
+      {children}
+    </section>
+  )
 }
 function Empty({ error, loading, label = 'No records available.' }) {
   return <p className={`pd-empty${error ? ' pd-error' : ''}`} role={error ? 'alert' : undefined}>{loading ? 'Loading live data…' : error || label}</p>
@@ -66,12 +89,13 @@ function Empty({ error, loading, label = 'No records available.' }) {
 
 export default function Dashboard() {
   const { showToast } = useToast()
-  const [data, setData] = useState([null, null, null, null, null, null, null])
+  const [data, setData] = useState([null, null, null, null, null, null, null, null])
   const [errors, setErrors] = useState([])
   const [loading, setLoading] = useState(true)
   const [updated, setUpdated] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
+  const [notifFilter, setNotifFilter] = useState('All')
   const requestId = useRef(0)
   const location = useLocation()
 
@@ -140,6 +164,27 @@ export default function Dashboard() {
     })
     return () => { disposed = true }
   }, [location.key])
+
+  useEffect(() => {
+    function handleNotificationsUpdated(e) {
+      if (e?.detail?.role && e.detail.role !== 'pharmacist') return
+      notificationApis.pharmacist.list({ page: 1, pageSize: 10 })
+        .then((val) => {
+          setData((prev) => {
+            const next = [...prev]
+            next[7] = unwrap(val)
+            return next
+          })
+          setUpdated(new Date())
+        })
+        .catch(() => {})
+    }
+
+    window.addEventListener('pms:notifications-updated', handleNotificationsUpdated)
+    return () => {
+      window.removeEventListener('pms:notifications-updated', handleNotificationsUpdated)
+    }
+  }, [])
 
   async function handleOpenDispense(row) {
     const rxId = field(row, ['prescriptionId', 'id', 'externalPrescriptionId']) || ''
@@ -212,6 +257,7 @@ export default function Dashboard() {
   const liveReturns = rows(data[4], ['returns', 'items', 'data'])
   const liveDispensing = rows(data[5], ['items', 'dispensing', 'records', 'data'])
   const nearExpiryRows = rows(data[6], ['items', 'medicines', 'records', 'data'])
+  const notificationsRaw = rows(data[7], ['notifications', 'items', 'records', 'data'])
 
   const fallbackAlerts = nearExpiryRows.map((item) => ({
     title: 'Near Expiry Alert',
@@ -220,6 +266,46 @@ export default function Dashboard() {
     type: 'expiry'
   }))
   const alerts = primaryAlerts.length > 0 ? primaryAlerts : fallbackAlerts
+
+  const notifications = notificationsRaw.map((n) => ({
+    id: n.id ?? n.notificationId ?? n._id ?? n.Id ?? n.NotificationId,
+    title: n.title ?? n.subject ?? n.Title ?? n.Subject ?? 'Notification from Admin',
+    message: n.message ?? n.body ?? n.content ?? n.description ?? n.Message ?? n.Body ?? n.Content ?? '',
+    status: String(n.status ?? n.Status ?? (n.isRead || n.IsRead ? 'read' : 'unread')).toLowerCase(),
+    isRead: n.isRead === true || n.IsRead === true || String(n.status ?? n.Status).toLowerCase() === 'read',
+    createdAt: n.createdAt ?? n.CreatedAt ?? n.createdDate ?? n.CreatedDate ?? n.sentAt ?? n.timestamp ?? '',
+    sender: n.senderName ?? n.SenderName ?? n.sender?.name ?? n.sender ?? n.createdByName ?? n.CreatedByName ?? 'Pharmacy Admin',
+  }))
+
+  const serverUnreadCount = useNotificationCount('pharmacist')
+  const unreadNotifCount = serverUnreadCount > 0 ? serverUnreadCount : notifications.filter((n) => !n.isRead).length
+  const visibleNotifications = notifications.filter((n) => {
+    if (notifFilter === 'Unread') return !n.isRead
+    if (notifFilter === 'Read') return n.isRead
+    return true
+  })
+
+  async function handleMarkNotificationRead(notifId) {
+    try {
+      await markPharmacistNotificationRead(notifId)
+      setData((prev) => {
+        const next = [...prev]
+        if (next[7]) {
+          const list = rows(next[7], ['notifications', 'items', 'records', 'data'])
+          const updated = list.map((item) => {
+            const itemId = item.id ?? item.notificationId ?? item._id
+            return itemId === notifId ? { ...item, status: 'read', isRead: true } : item
+          })
+          next[7] = { ...next[7], notifications: updated, items: updated }
+        }
+        return next
+      })
+      showToast('Notification marked as read.')
+      window.dispatchEvent(new CustomEvent('pms:notifications-updated', { detail: { role: 'pharmacist' } }))
+    } catch (err) {
+      showToast(err.message || 'Unable to mark notification read.', 'error')
+    }
+  }
 
   const statusOf = (row) => text(field(row, ['status', 'prescriptionStatus']), 'Pending')
   const urgent = (row) => /urgent|high|critical/i.test(text(field(row, ['priority', 'urgency']), ''))
@@ -255,7 +341,7 @@ export default function Dashboard() {
       {errors[0] && !errors[0].includes('Access denied') && <div className="pd-banner" role="alert">Dashboard summary: {errors[0]}</div>}
       <div className="pd-metrics">{metrics.map(([icon, label, value]) => <article className="pd-metric" key={label}><span className="pd-icon"><Icon name={icon} /></span><div><p>{label}</p><strong>{loading ? '…' : count(value)}</strong><small>{value === undefined ? 'Not provided by the server' : 'Current live records'}</small></div></article>)}</div>
 
-      <nav className="pd-action-cards" aria-label="Quick actions">{[['dispense', 'Dispense & Billing', 'dispensing'], ['stock', 'Check medicine stock', 'medicines'], ['bill', 'Manage bills', 'bills'], ['chart', 'View reports', 'reports']].map(([icon, label, path]) => <Link key={path} to={`/pharmacist/${path}`}><Icon name={icon} />{label}</Link>)}</nav>
+      <nav className="pd-action-cards" aria-label="Quick actions">{[['dispense', 'Dispense & Billing', 'dispensing'], ['stock', 'Check medicine stock', 'medicines'], ['bill', 'Manage bills', 'bills'], ['bell', 'Admin Notifications', 'notifications']].map(([icon, label, path]) => <Link key={path} to={`/pharmacist/${path}`}><Icon name={icon} />{label}{path === 'notifications' && unreadNotifCount > 0 ? <span className="sidebar-unread-badge" style={{ marginLeft: '6px' }}>{unreadNotifCount}</span> : null}</Link>)}</nav>
       <div className="pd-main-row">
         <Panel title="Prescription Queue" icon="prescription" to="/pharmacist/dispensing">
           <div className="pd-queue-tools">
@@ -311,19 +397,84 @@ export default function Dashboard() {
           {!visibleQueue.length && <Empty loading={loading} error={errors[1]} label={search || filter !== 'All' ? 'No matching prescriptions.' : 'No pending prescriptions.'} />}
           {visibleQueue.length > 5 && <Link className="pd-more" to="/pharmacist/dispensing">View all {visibleQueue.length} matching prescriptions →</Link>}
         </Panel>
-        <Panel title="Needs Attention" icon="alert" to="/pharmacist/medicines">
-          {alerts.slice(0, 4).map((alert, index) => (
-            <Link className="pd-alert-row" key={index} to="/pharmacist/medicines">
-              <span className="pd-icon"><Icon name="alert" /></span>
-              <div>
-                <strong>{text(field(alert, ['title', 'type', 'medicineName']), 'Inventory alert')}</strong>
-                <small>{text(field(alert, ['message', 'description', 'details']), 'Review medicine inventory')}</small>
-              </div>
-              <span>→</span>
-            </Link>
-          ))}
-          {!alerts.length && <Empty loading={loading} error={errors[2]} label="No inventory alerts reported." />}
-        </Panel>
+
+        <div className="pd-side-stack">
+          <Panel
+            title="Admin Notifications"
+            icon="bell"
+            to="/pharmacist/notifications"
+            badge={unreadNotifCount > 0 ? `${unreadNotifCount} unread` : null}
+          >
+            <div className="pd-tabs" style={{ marginBottom: '10px' }}>
+              {['All', 'Unread', 'Read'].map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  aria-pressed={notifFilter === tab}
+                  onClick={() => setNotifFilter(tab)}
+                >
+                  {tab}{tab === 'Unread' && unreadNotifCount > 0 ? ` (${unreadNotifCount})` : ''}
+                </button>
+              ))}
+            </div>
+            {visibleNotifications.slice(0, 4).map((notif) => {
+              const isUnread = !notif.isRead
+              return (
+                <div key={notif.id} className="pd-notif-row">
+                  <div className="pd-notif-icon">
+                    <Icon name="bell" />
+                    {isUnread && <span className="pd-notif-dot" />}
+                  </div>
+                  <div className="pd-notif-content">
+                    <div className="pd-notif-title-row">
+                      <strong>{notif.title}</strong>
+                      <span className="pd-notif-time">{formatTime(notif.createdAt)}</span>
+                    </div>
+                    <p className="pd-notif-message">{notif.message}</p>
+                    <div className="pd-notif-footer">
+                      <small className="pd-notif-sender">From: {notif.sender}</small>
+                      {isUnread && (
+                        <button
+                          type="button"
+                          className="pd-notif-read-btn"
+                          onClick={() => handleMarkNotificationRead(notif.id)}
+                        >
+                          Mark Read
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {!visibleNotifications.length && (
+              <Empty
+                loading={loading}
+                error={errors[7]}
+                label={notifFilter === 'Unread' ? 'No unread notifications.' : 'No notifications available.'}
+              />
+            )}
+            {visibleNotifications.length > 4 && (
+              <Link className="pd-more" to="/pharmacist/notifications">
+                View all {visibleNotifications.length} notifications →
+              </Link>
+            )}
+          </Panel>
+
+          <Panel title="Needs Attention" icon="alert" to="/pharmacist/medicines">
+            {alerts.slice(0, 4).map((alert, index) => (
+              <Link className="pd-alert-row" key={index} to="/pharmacist/medicines">
+                <span className="pd-icon"><Icon name="alert" /></span>
+                <div>
+                  <strong>{text(field(alert, ['title', 'type', 'medicineName']), 'Inventory alert')}</strong>
+                  <small>{text(field(alert, ['message', 'description', 'details']), 'Review medicine inventory')}</small>
+                </div>
+                <span>→</span>
+              </Link>
+            ))}
+            {!alerts.length && <Empty loading={loading} error={errors[2]} label="No inventory alerts reported." />}
+          </Panel>
+        </div>
 
       </div>
 
